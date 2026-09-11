@@ -2,15 +2,24 @@
 # 2026-08-14
 # Benchmark analysis of GENETHOFF, GUIDE-seq (v1.0.2 / v2) and iGUIDE-seq (v1.2.0)
 
+# R 4.6.1
 
-#---------------------------------------------##
+#---------------------------------------------
 # Load libraries ----
-#---------------------------------------------##
+#---------------------------------------------
+
+source("rbo_functions.R")
 
 library(tidyverse)
 library(GenomicRanges)
 library(patchwork)
 library(ggprism)
+library(UpSetR)
+library(ComplexUpset)
+library(ggvenn)
+library(pheatmap)
+library(gridExtra)
+library(grid)
 
 slop_window = 10 # use to cluster cleavage sites across pipelines
 
@@ -19,10 +28,11 @@ slop_window = 10 # use to cluster cleavage sites across pipelines
 #---------------------------------------------##
 
 runtime <- read.delim("runtime_benchmark.csv", sep =";", check.names = F)
+runtime <- runtime %>% mutate(tools = factor(tools,levels = c("GENETHOFF" ,"GUIDE-seq_v1" ,"GUIDE-seq_v2" , "iGUIDE-seq")))
 
 
-
-runtime_raw <- ggplot(runtime, aes(total_threads, as.numeric(real_min), fill = factor(tools))) +
+runtime_raw <- ggplot(runtime, aes(total_threads, as.numeric(real_min), 
+                                   fill = tools)) +
   geom_point(size = 3, pch = 21, col = "black")+
   ggprism::theme_prism(base_size = 12)+
   stat_summary(
@@ -36,7 +46,7 @@ runtime_raw <- ggplot(runtime, aes(total_threads, as.numeric(real_min), fill = f
   scale_x_continuous(breaks = c(6,12,24))+
   scale_y_continuous()
 
-scalability <- ggplot(runtime, aes(total_threads,`user+sys`/as.numeric(real_min), fill = factor(tools))) +
+scalability <- ggplot(runtime, aes(total_threads,`user+sys`/as.numeric(real_min), fill = tools)) +
   geom_point(size = 3, pch = 21, col = "black")+
   geom_abline(lty = 2, col = "grey") + 
   ggprism::theme_prism(base_size = 12)+
@@ -165,7 +175,8 @@ scalability <- ggplot(runtime, aes(total_threads,`user+sys`/as.numeric(real_min)
   genethoff_sub <- lapply(genethoff, function(x){
     x %>%
       filter(!is.na(Alignment),
-             abs(relative_distance) < 15) %>%
+             abs(relative_distance) < 15,
+             PAM_indel_count <=1) %>%
       select(chromosome, N_UMI_cluster,cut_modal_position)  
     
   }
@@ -187,7 +198,7 @@ scalability <- ggplot(runtime, aes(total_threads,`user+sys`/as.numeric(real_min)
   }
   
   
-  genethoff <- bind_rows(,.id = "gRNA")
+  genethoff <- bind_rows(genethoff_aggregated,.id = "gRNA")
 
   rm(targets); rm(genethoff_aggregated); rm(genethoff_sub)
 
@@ -214,7 +225,7 @@ scalability <- ggplot(runtime, aes(total_threads,`user+sys`/as.numeric(real_min)
   
   iguideseq <- bind_rows(iguide_aggregated,.id = "gRNA")
 
-  rm(path); rm(iguide_aggregated);rm(iguide)
+  rm(iguide_aggregated);rm(iguide)
   
   
 #---------------------------------------------##
@@ -297,7 +308,8 @@ scalability <- ggplot(runtime, aes(total_threads,`user+sys`/as.numeric(real_min)
                                      gRNA=="VEGFAs2" & Position %in% c("6_43770825_43770825","6_43770824_43770824") ~ T,
                                      gRNA=="VEGFAs3" & Position %in%c("6_43769732_43769732", "6_43769733_43769733") ~ T,
                                      TRUE ~ FALSE)
-             )
+             ) %>% 
+      mutate(workflow = factor(workflow, levels = c("GENETHOFF" ,"GUIDE-seq_v1" ,"GUIDE-seq_v2" , "iGUIDE-seq")))
 
     
     #---------------------------------------------##
@@ -324,13 +336,15 @@ write.table(all_gRNAs_pipelines_wide, paste("complete_OT_table_all_methods_wide_
 #---------------------------------------------##
 # Make some plots ----
 #---------------------------------------------##
-library(UpSetR)
-library(tidyverse)
 
-#reload tables if necessary 
-all_gRNAs_pipelines <- read.delim("complete_OT_table_all_methods_10bp.csv", header = T, sep =";")
-all_gRNAs_pipelines_wide <- read.delim("complete_OT_table_all_methods_wide_10bp.csv", header = T, sep =";")
+  #---------------------------------------------##
+  ## Reload datasets ----
+  #---------------------------------------------##
 
+  #reload tables if necessary 
+  all_gRNAs_pipelines <- read.delim("complete_OT_table_all_methods_10bp.csv", header = T, sep =";")
+  all_gRNAs_pipelines_wide <- read.delim("complete_OT_table_all_methods_wide_10bp.csv", header = T, sep =";")
+  
 
 
   #---------------------------------------------##
@@ -383,9 +397,7 @@ rank_ab
   #---------------------------------------------##
   # Venn diagrams and upset plots ----
   #---------------------------------------------##
-  library(UpSetR)
-  library(ComplexUpset)
-  library(ggvenn)
+
 
 # set parameters
 
@@ -406,13 +418,13 @@ text_size = 4
     lst <- split(df$cluster,f=df$workflow)
     
     # make the venn
-    venn_plot[[i]] <- ggvenn::ggvenn(lst,
-                               set_name_color = "white",
-                               fill_alpha = 0.8,
-                               fill_color = scale_fill_hue()$palette(4),
-                               set_name_size =3,
-                               text_size = text_size,
-                               show_percentage = FALSE) +
+    venn_plot[[i]] <- ggvenn::ggvenn(lst, 
+                                     set_name_color = NA,
+                                     fill_alpha = 0.8,
+                                     fill_color = scale_fill_hue()$palette(4),
+                                     set_name_size =3,
+                                     text_size = text_size,
+                                     show_percentage = FALSE) +
       ggtitle(i) + 
       ggprism::theme_prism(base_size = 12)+
       theme(plot.margin = unit(margins,units = "cm"), 
@@ -433,7 +445,7 @@ text_size = 4
       width_ratio=0.2,name = NULL,height_ratio = 0.6, 
       stripes='white',
       base_annotations=list(
-        'Cleavage sites'= intersection_size(
+        'Cleavage sites'= ComplexUpset::intersection_size(
           counts=TRUE,
           fill = "black")
       ),
@@ -442,11 +454,7 @@ text_size = 4
       )+
         labs(y="Cleavage sites")
     ) 
-    
-    
   }
-
-
 
   #---------------------------------------------##
   ## Make the final montage ----
@@ -461,8 +469,265 @@ x11();
   theme(legend.position = "bottom")
 
 
+ggsave(filename = "Figure2.svg",device = "svg",dpi = 300,width = 16 ,height = 6,units = "in")
+ggsave(filename = "Figure2.eps",device = cairo_ps,dpi = 300,width = 16 ,height = 6,units = "in")
 #---------------------------------------------##
-# Calculate Kendall W concordance score on ranks ----
+# Get agreement statistics between pipelines----
+#---------------------------------------------##
+
+{
+  #---------------------------------------------##
+  ## Detection concordance using jaccard index ----
+  #---------------------------------------------##
+
+# make functions
+jaccard <- function(x,y){
+  length(intersect(names(x), names(y))) /
+  length(union(names(x), names(y)))
+}
+
+jaccard_topk <- function(x, y, k = 20) {
+  sx <- names(sort(x,decreasing = T))[1:min(k, length(x))]
+  sy <- names(sort(y,decreasing = T))[1:min(k, length(y))]
+  
+  length(intersect(sx, sy)) /
+    length(union(sx, sy))
+}
+
+
+
+# make a list of named abundances
+list_grna <- split(all_gRNAs_pipelines,f = all_gRNAs_pipelines$gRNA)
+
+list_grna <- lapply(list_grna, function(x){
+
+    split(setNames(x$counts,x$cluster),x$workflow)
+})
+
+
+## Jaccard distance matrix
+#---------------------------------------------##
+jaccard_all <- lapply(list_grna, function(x){
+  n <- length(x)
+  
+  jmat <- matrix(
+    NA,
+    nrow = n,
+    ncol = n,
+    dimnames = list(names(x), names(x))
+  )
+  
+  for(i in seq_len(n)){
+    for(j in seq_len(n)){
+      jmat[i, j] <- jaccard(x[[i]], x[[j]])
+    }
+  }
+  jmat
+})
+
+
+# Create pheatmaps and capture the grobs
+ph_list_jaccard_all <- lapply(names(jaccard_all), function(n) {
+  mat <- jaccard_all[[n]]
+  
+  pheatmap(cluster_rows = F, cluster_cols = F,
+           mat,
+           color = viridisLite::cividis(100),
+           breaks = seq(0, 1, length.out = 101),legend = n=="TRAC",number_format = "%.3f",
+           main = n,display_numbers = T, number_color = "white",
+           silent = TRUE, na_col = "black",border_color = "white"
+  )$gtable
+})
+
+# Arrange in a 2x2 matrix
+jaccard_plot <- grid.arrange(
+  grobs = ph_list_jaccard_all,
+  ncol = 2,
+  bottom = grid::textGrob(
+    "Figure S1: Jaccard coefficient matrix",
+    gp = grid::gpar(fontsize = 12, fontface = "plain"),
+    x = unit(0.02, "npc"), 
+    just = "left"
+  )
+)
+
+
+
+
+
+## Jaccard top n distance matrix
+#---------------------------------------------##
+
+top_sites = 25
+
+jaccard_top <- lapply(list_grna, function(a){
+  n <- length(a)
+  
+  jmat <- matrix(
+    NA,
+    nrow = n,
+    ncol = n,
+    dimnames = list(names(a), names(a))
+  )
+  
+  for(i in seq_len(n)){
+    for(j in seq_len(n)){
+      jmat[i, j] <- jaccard_topk(a[[i]], a[[j]],k=top_sites)
+    }
+  }
+  jmat
+})
+
+
+
+
+# Create pheatmaps and capture the grobs
+ph_list_jaccard_top <- lapply(names(jaccard_top), function(n) {
+  mat <- jaccard_top[[n]]
+  
+  pheatmap(cluster_rows = F, cluster_cols = F,
+           mat,
+           color = viridisLite::cividis(100),
+           breaks = seq(0, 1, length.out = 101),number_format = "%.3f",
+           main = n,display_numbers = T, legend = n=="TRAC", number_color = "black",
+           silent = TRUE, na_col = "black",border_color = "white"
+  )$gtable
+})
+
+# Arrange in a 2x2 matrix
+jaccard_top_plot <- grid.arrange(
+  grobs = ph_list_jaccard_top,
+  ncol = 2,top = grid::textGrob(
+    paste("Jaccard distance of top",top_sites,"sites"),
+    gp = gpar(fontsize = 16, fontface = "bold")
+  )
+)
+
+
+
+  #---------------------------------------------##
+  ## correlation on common sites ----
+  #---------------------------------------------##
+
+corr_shared <- function(x,y,type = "spearman"){
+  common <- intersect(names(x), names(y))
+  
+  cor(x[common],
+      
+      y[common], use = "complete.obs",
+      
+      method=type)
+}
+
+
+correlation_shared <- lapply(list_grna, function(a){
+  n <- length(a)
+  
+  jmat <- matrix(
+    NA,
+    nrow = n,
+    ncol = n,
+    dimnames = list(names(a), names(a))
+  )
+  
+  for(i in seq_len(n)){
+    for(j in seq_len(n)){
+      jmat[i, j] <- corr_shared(a[[i]], a[[j]],"kendall")
+    }
+  }
+  jmat
+})
+
+# Create pheatmaps and capture the grobs
+ph_list_correlation <- lapply(names(correlation_shared), function(n) {
+  mat <- correlation_shared[[n]]
+  
+  pheatmap(cluster_rows = F, cluster_cols = F,
+           mat,
+           color = viridisLite::cividis(100),
+           breaks = seq(0, 1, length.out = 101),number_format = "%.3f",legend = n=="TRAC",
+           main = n,display_numbers = T, number_color = "black",
+           silent = TRUE, na_col = "black",border_color = "white"
+  )$gtable
+})
+
+# Arrange in a 2x2 matrix
+corr_plot <- grid.arrange(
+  grobs = ph_list_correlation,
+  ncol = 2,
+  bottom = grid::textGrob(
+    "Figure S2: Kendall correlation matrix (shared sites only).\nWhen a single site is shared, no correlation can be calculated (black cells)",
+    gp = grid::gpar(fontsize = 12, fontface = "plain"),
+    x = unit(0.02, "npc"), 
+    just = "left"
+  )
+)
+
+
+
+
+  #---------------------------------------------##
+  ## RBO metric ----
+
+p = 0.8
+top <- Inf # number of top ranked site to evaluate, Inf for all, an integer otherwise
+
+rbo_scores <- lapply(list_grna, function(a,k=top){
+  n <- length(a)
+  
+  jmat <- matrix(
+    NA,
+    nrow = n,
+    ncol = n,
+    dimnames = list(names(a), names(a))
+  )
+  
+  for(i in seq_len(n)){
+    for(j in seq_len(n)){
+      ni <- length(a[[i]])
+      nj <- length(a[[j]])
+      # If k is set, take the top k sites per list, otherwise take all elements of each list
+      if(k!=Inf){
+        nij <- min(ni,nj,k)
+        ni <- nj <- nij
+      }
+      
+      jmat[i, j] <- rbo_ext_fast2(L = names(sort(a[[i]],decreasing = T))[1:ni],S =  names(sort(a[[j]], decreasing = T))[1:nj],p =  p)$rbo
+    }
+  }
+  jmat
+})
+
+
+# Create pheatmaps and capture the grobs
+ph_list_rbo <- lapply(names(rbo_scores), function(n) {
+  mat <- rbo_scores[[n]]
+  
+  pheatmap(cluster_rows = F, cluster_cols = F,
+           mat,
+           color = viridisLite::cividis(100),number_format = "%.3f",
+           breaks = seq(0, 1, length.out = 101),legend = n=="TRAC",
+           main = n,display_numbers = T, number_color = "black", 
+           silent = TRUE, na_col = "black",border_color = "white"
+  )$gtable
+})
+
+
+# Arrange in a 2x2 matrix
+rbo_plot <- grid.arrange(
+  grobs = ph_list_rbo,
+  ncol = 2,
+  bottom = grid::textGrob(
+    "Figure S3: Rank Biased Overlap (RBO) matrix (Persistence parameter p=0.8)",
+    gp = grid::gpar(fontsize = 12, fontface = "plain"),
+    x = unit(0.02, "npc"), 
+    just = "left"
+  )
+)
+
+
+#---------------------------------------------##
+## Calculate Kendall W concordance score on ranks ----
 #---------------------------------------------##
 
 library(irr)
@@ -473,8 +738,8 @@ for(grna in c("B2M","TRAC","VEGFAs2","VEGFAs3")){
     select(cluster,ends_with("prop")) %>%
     column_to_rownames("cluster") %>%
     mutate(across(everything(), ~replace_na(.x, 0))) %>% 
-    filter(if_any(everything(), ~ . >= 1)) %>%             # keep site that repsent more than x % of total abundance
-    mutate(across(everything(), ~row_number(-.x)))         # calculte the rank
+    mutate(across(everything(), ~dense_rank(-.x))) %>%         # calculate the rank
+    filter(if_any(everything(), ~ . <= 20))                    # keep site that represent more than x % of total abundance
   if(nrow(x_df)>1){
     x = kendall(x_df,correct = T)
   }else {
@@ -484,5 +749,14 @@ for(grna in c("B2M","TRAC","VEGFAs2","VEGFAs3")){
   print(x)
   cat("####################\n")
   }
+}
+#---------------------------------------------##
+# generate a pdf supplementary file ----
+#---------------------------------------------##
 
 
+pdf("supplemental_figures1-3.pdf",paper = "a4")
+plot(jaccard_plot)
+plot(corr_plot)
+plot(rbo_plot)
+dev.off()
